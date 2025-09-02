@@ -1,0 +1,264 @@
+---
+title: Configuration vs Composition
+description: Deciding between configuration and composition when building UI components
+---
+
+Remember that one time you were building a frontend with [MUI](https://mui.com/), and the designer requested a design refresh? How much did you have to monkey-patch MUI to achieve the desired design?
+
+When you see a code example [like this](https://mui.com/material-ui/react-menu/#positioned-menu), containing only 2 simple design-system components, how closely can you guess what elements actually rendered to the DOM?
+
+When evaluating UI component libraries, what criteria do you use to determine that one is better than the other?
+
+![thinking really hard](https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExemN2c3IycmY3NHF0bDIycTU3bWJqenAyNHNyeGZobWlqand2NWU4dyZlcD12MV9naWZzX3NlYXJjaCZjdD1n/a5viI92PAF89q/giphy.gif)
+
+Let's say you're about to add a new `Input` component to your application's design system. The UI designer has provided you an initial design-system [Figma](https://www.figma.com/) file where you see an input with some border radius, padding, and a placeholder text. How would you build this component?
+
+## Configuration
+
+At first the component will be extremely simple.
+
+```tsx title="input.tsx"
+export const Input: FC<ComponentProps<"input">> = ({ className, ...props }) => {
+  return (
+    <input className={cn("rounded-md border border-gray-300 p-2", className)} {...props} />
+  );
+};
+```
+
+The UI designer then gives you the first form design. The inputs now have a label above the input field. The implementation you'll likely see most often in the wild will probably look something like this:
+
+```tsx title="input.tsx"
+type InputProps = ComponentProps<"input"> & {
+  // 🎉 Tada! Now supporting labels!
+  label: string;
+};
+
+export const Input: FC<InputProps> = ({ className, label, ...props }) => {
+  return (
+    // Wrap the input with a div to put the label in
+    <div className={cn("flex flex-col gap-2", className)}>
+      <label className="text-sm text-gray-500">{label}</label>
+      <input className="w-full rounded-md border border-gray-300 p-2" {...props} />
+    </div>
+  );
+};
+```
+
+But let's say the designer came back with new forms, where some inputs don't have labels, but others do, sometimes with or without submit buttons that are aligned to the right of the input. How would you handle this? Well, maybe you'll see something like this:
+
+```tsx title="input.tsx"
+type InputProps = ComponentProps<"input"> & {
+  // The label now needs to be optional
+  label?: string;
+  // Now needs to be able to inline a submit button
+  withSubmitButton?: boolean;
+};
+
+export const Input: FC<InputProps> = ({
+  className,
+  disabled,
+  label,
+  withSubmitButton,
+  ...props
+}) => {
+  return (
+    <div className={cn("flex flex-col gap-2", className)}>
+      {!!label && <label className="text-sm text-gray-500">{label}</label>}
+      <div className="flex gap-2 w-full">
+        <input
+          className={cn("grow rounded-md border border-gray-300 p-2", disabled && "opacity-50")}
+          disabled={disabled}
+          {...props}
+        />
+        {withSubmitButton && <Button disabled={disabled} type="submit">Submit</Button>}
+      </div>
+    </div>
+  );
+};
+```
+
+But what if even more form designs come in? In these new forms, the inputs now add optional helper texts below the input, and the button can now also be a non-submit button, support icons and loading states. What now? Maybe we add a prop with type `ButtonProps` to the `Input` component so that it can be more future-proof to new form designs.
+
+```tsx title="input.tsx"
+type InputProps = ComponentProps<"input"> & {
+  helperText?: string;
+  label?: string;
+  // withSubmitButton has been removed, and replaced with buttonProps
+  buttonProps?: ButtonProps;
+};
+
+export const Input: FC<InputProps> = ({
+  buttonProps,
+  className,
+  disabled,
+  helperText,
+  label,
+  ...props
+}) => {
+  return (
+    <div className={cn("flex flex-col gap-2", className)}>
+      {!!label && <label className="text-sm text-gray-500">{label}</label>}
+      <div className="flex gap-2 w-full">
+        <input
+          className={cn("grow rounded-md border border-gray-300 p-2", disabled && "opacity-50")}
+          disabled={disabled}
+          {...props}
+        />
+        {!!buttonProps && <Button disabled={disabled} {...buttonProps} />}
+      </div>
+      {!!helperText && <p className="text-sm text-gray-500">{helperText}</p>}
+    </div>
+  );
+};
+```
+
+![sweating because intense](https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExazlxb2doYTRqM2owZ2sybXd2N2cwMGJkdzBreTdyOTEzem1ib3pubiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/1xVbWum9YGaf3FlQDx/giphy.gif)
+
+### Assessing the approach
+
+In the prior examples, we built a component that is able to be used in a number of different ways. This was achieved by defining new props to `InputProps` that added or removed functionality in situations where it was needed - i.e. **"Configuration"**.
+
+Via this approach, using this component starts off very tame and simple.
+
+```tsx title="example.tsx"
+<Input label="Name" placeholder="Enter your name" />;
+```
+
+But as requirements grew, we encountered a number of downsides that decreased our confidence in using and extending the component.
+
+1. **Added a known breaking change** - We needed more flexibility, so we removed a prop. This broke all usages that needed to use the submit button.
+2. **Introduced unexpected issues** - parent components that leveraged nested CSS selectors broke (e.g. `[&>div>input]:border-red-500`). Some components that used `@radix-ui/react-slot` broke when `Input` was used as a server component, because the `Slot` expected an `input`, not a `div`.
+3. **Component re-renders all the time** - When I need a button, I added props that caused the component to re-render, even when nothing changed.
+
+    ```tsx title="example.tsx"
+    <Input
+      label="Name"
+      placeholder="Enter your name"
+      helperText="This is a helper text"
+      // All props are static primitives, but are provided as an inlined object
+      // causing the component to re-render all the time
+      buttonProps={{ children: "Submit", type: "submit" }}
+    />
+    ```
+4. **Excessive DOM elements** - When all I needed in one form was a regular `input`, my `input` now wraps 2 `div`s for no reason.
+
+## Composition
+
+How can we do better?
+
+Let's rewrite the final example using composition.
+
+```tsx title="input.tsx"
+type InputProps = ComponentProps<"input">;
+type InputFieldProps = ComponentProps<"div">;
+type InputLabelProps = ComponentProps<"label">;
+type InputGroupProps = ComponentProps<"div">;
+type InputHelperTextProps = ComponentProps<"p">;
+
+export const Input: FC<InputProps> = ({ className, ...props }) => {
+  return (
+    <input
+      className={cn("rounded-md border border-gray-300 p-2", className)}
+      {...props}
+    />
+  );
+};
+
+export const InputField: FC<InputFieldProps> = ({ children, className, ...props }) => {
+  return (
+    <div className={cn("flex flex-col gap-2", className)} {...props}>
+      {children}
+    </div>
+  );
+};
+
+export const InputLabel: FC<InputLabelProps> = ({ children, className, ...props }) => {
+  return (
+    <label className={cn("text-sm text-gray-500", className)} {...props}>
+      {children}
+    </label>
+  );
+};
+
+export const InputHelperText: FC<InputHelperTextProps> = ({
+  children,
+  className,
+  ...props
+}) => {
+  return (
+    <p className={cn("text-sm text-gray-500", className)} {...props}>
+      {children}
+    </p>
+  );
+};
+
+export const InputGroup: FC<InputGroupProps> = ({ children, className, ...props }) => {
+  return (
+    <div className={cn("flex gap-2 w-full [&>input]:grow", className)} {...props}>
+      {children}
+    </div>
+  );
+};
+```
+
+This time, we've re-defined the `Input` component so that instead of being a single component with several custom props used to configure the behavior, it's now a collection of smaller components that are _**composed together**_ to create the desired behavior. In other words, we are using **"Composition"** via leveraging XML as part of the API signature of the `Input` component.
+
+### Assessing the approach
+
+How does this compare to the previous example?
+
+```tsx title="example.tsx"
+<InputField>
+  <InputLabel>Name</InputLabel>
+  <InputGroup>
+    <Input placeholder="Enter your name" />
+    <Button size="sm" type="submit" variant="primary">
+      {isPending && <SpinnerIcon className="size-4" />}
+      <span>Submit</span>
+    </Button>
+  </InputGroup>
+  <InputHelperText>This is a helper text</InputHelperText>
+</InputField>
+```
+
+Well, it's certainly more verbose. Immediate impressions are that it looks more complex and kinda gross. Kinda like how it felt looking at [Tailwind CSS](https://tailwindcss.com/) for the first time. Verbose, complicated, excessive, and a bit of a mess.
+
+But...
+
+It's somehow similarly usable. The `label` prop is now just a `ReactElement` called `InputLabel`, and the `helperText` prop is now just a `ReactElement` called `InputHelperText`.
+
+Frankly, it's even more usable. I also just slapped a button inside the `InputGroup` to add it in, and configured it as specifically as I cared to.
+
+What was that? The designer suddenly is asking for an icon button on the left of the input? Damn bro, what is this design even? Ain't no matter:
+
+```tsx title="example.tsx"
+<InputField>
+  <InputLabel>Name</InputLabel>
+  <InputGroup>
+    {/* BAM! 1-off button with icon to the left! */}
+    <Button size="icon-sm" type="button" variant="primary">
+      <RefreshCwIcon className="size-4" />
+    </Button>
+    <Input placeholder="Enter your name" />
+    <Button size="sm" type="submit" variant="primary">
+      {isPending && <SpinnerIcon className="size-4" />}
+      <span>Submit</span>
+    </Button>
+  </InputGroup>
+  <InputHelperText>This is a helper text</InputHelperText>
+</InputField>
+```
+
+We don't even need to modify the `Input` component to add this button for this atypical, 1-off case from the design.
+
+![easy peasy](https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExazBxNWQ1cTdyODdnZmpmNjVjMHZ0d2I4eGs0bjRodzR4NTk5Zm0wYiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/NaboQwhxK3gMU/giphy.gif)
+
+## Final thoughts
+
+The **configuration** approach can be really powerful when building components that require a lot of flexibility and extensibility. For that reason, it's no wonder that component libraries like [shadcn/ui](https://ui.shadcn.com/) and [Base UI](https://base-ui.com/) are built this way since they're created to be used in a wide range of contexts.
+
+On the flip side however, usage can become significantly more verbose, and the flexibility can make it difficult to enforce that components only be used in a specific way.
+
+When you need a component that is expected to be used in 1 specific part of the application (e.g. a form to configure a new webhook), **configuration** helps to keep your component concise, readable, and constrained in how it can be used.
+
+The answer on which approach to take is not always clear (i.e. gray area), and it's important to think of how your components will be used over time, and have that guide your decision on which approach is most appropriate.

@@ -1,39 +1,5 @@
-# gray-areas
+# Gray Areas
 
-This is a Next.js application generated with
-[Create Fumadocs](https://github.com/fuma-nama/fumadocs).
+When it comes to programming or building software, most believe in a `best` way to do something - their way. Some might acknowledge that while there are problems that aren't so cut and dry, there are categorically good solutions to keep in your back pocket, and bad approaches that should always be avoided. However, after many decisions I've footgunned over the years, I've learned there's much more nuance to some situations that warrants reconsidering "bad" options or thinking outside of `best` principles to solve well. These are the gray-areas.
 
-Run development server:
-
-```bash
-npm run dev
-# or
-pnpm dev
-# or
-yarn dev
-```
-
-Open http://localhost:3000 with your browser to see the result.
-
-## Explore
-
-In the project, you can see:
-
-- `lib/source.ts`: Code for content source adapter, [`loader()`](https://fumadocs.dev/docs/headless/source-api) provides the interface to access your content.
-- `lib/layout.shared.tsx`: Shared options for layouts, optional but preferred to keep.
-
-| Route                     | Description                                            |
-| ------------------------- | ------------------------------------------------------ |
-| `app/(home)`              | The route group for your landing page and other pages. |
-| `app/docs`                | The documentation layout and pages.                    |
-| `app/api/search/route.ts` | The Route Handler for search.                          |
-
-## Learn More
-
-To learn more about Next.js and Fumadocs, take a look at the following
-resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js
-  features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-- [Fumadocs](https://fumadocs.vercel.app) - learn about Fumadocs
+Being able to navigate nuances and understanding when to diverge from `correct` approaches is what separates strong professionals in industry. None of the considerations contained in this collection of docs are meant to express "how you should do a thing", but rather to help either strengthen or challenge ideas about approaches in programming and building software for your next project, or with your current employer/team.
