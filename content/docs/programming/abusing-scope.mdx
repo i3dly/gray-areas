@@ -1,0 +1,139 @@
+---
+title: Abusing Scope
+description: How to reduce function complexity by abusing the scope of variables.
+---
+
+Have you ever needed to work within functions that referened global variables? Or functions that started with a ton of variable declarations at the top? How difficult did you find it to understand those functions?
+
+Years ago, I read this article called [The Magical Number Seven, Plus or Minus Two](https://en.wikipedia.org/wiki/The_Magical_Number_Seven,_Plus_or_Minus_Two) that described how human beings can only keep track of about 7±2 things in their working memory. Each new variable that becomes added to a scope adds another "thing" that needs to be tracked in your working memory.
+
+The scope of a variable (i.e. scope) defines where variables can be accessed or modified in your code. By constraining scopes, we can reduce the things that need to be tracked, and make our code easier to understand. Here are a few examples of how we can "abuse scope" to achieve this.
+
+## Moving variables down
+
+Typically, code that is executed synchronously cannot reference variables that are declared after it (as they have not yet been instantiated). As a result, most code you'll see will write all of the variable declarations at the top so that they are available to the rest of the function.
+
+```ts
+const prepareFeast = () => {
+    // All of the variables, nicely grouped together at the top.
+    const fruit = "cranberry";
+    const pastry = "pie crust";
+    const protein = "chicken";
+    const sauce = "gravy";
+    const starch = "potato";
+    const sweetener = "sugar";
+    const vegetable = "romaine lettuce";
+
+    const pie = bakePie({
+        ingredients: [fruit, pastry, sweetener],
+    });
+    const salad = makeSalad({
+        ingredients: [fruit, protein, vegetable],
+    });
+    const dinner = makeDinner({
+        ingredients: [protein, sauce, starch, vegetable],
+    });
+};
+```
+
+However, if we move each of the variables down to the closest point of use, we can reduce the amount of variables that are usable earlier in the function.
+
+```ts
+const prepareFeast = () => {
+    const fruit = "cranberry";
+    const pastry = "pie crust";
+    const sweetener = "sugar";
+
+    const pie = bakePie({
+        ingredients: [fruit, pastry, sweetener],
+    });
+
+    // These aren't used when baking a pie
+    const protein = "chicken";
+    const vegetable = "romaine lettuce";
+
+    const salad = makeSalad({
+        ingredients: [fruit, protein, vegetable],
+    });
+
+    // These aren't used when baking a pie and making a salad
+    const sauce = "gravy";
+    const starch = "potato";
+
+    const dinner = makeDinner({
+        ingredients: [protein, sauce, starch, vegetable],
+    });
+};
+```
+
+## Using .then() in async functions
+
+Typically, using `async` on a function serves the purpose of avoiding using callbacks for asynchronous operations (i.e. [callback hell](https://callbackhell.com/)).
+
+```ts title="this-used-to-suck.ts"
+const createUser = (
+    userId: string,
+    callback: (user: User | null, err: Error | null) => void,
+) => {
+    db.findUsers({ id: userId }, (rows, err) => {
+        if (err) {
+            callback(null, err);
+            return;
+        }
+
+        const user = rows[0];
+        if (user) {
+            callback(user, null);
+            return;
+        }
+
+        db.createUser({
+            id: userId,
+            name: "John Doe",
+        }, (newUser, err) => {
+            if (err) {
+                callback(null, err);
+                return;
+            }
+
+            callback(newUser, null);
+        });
+    });
+};
+```
+
+```ts title="this-is-simpler.ts"
+const createUser = async (
+    userId: string
+) => {
+    // `rows` is only used to derive `user`
+    const rows = await db.findUsers({ id: userId });
+    const user = rows[0] ?? null;
+
+    if (user) return user;
+
+    return await db.createUser({
+        id: userId,
+        name: "John Doe",
+    });
+```
+
+However, even when using `async`, using a `.then()` callback can still be handy to avoid introducing new variables to the scope that would only be used to derive a single value.
+
+```ts title="this-is-even-simpler.ts"
+const createUser = async (
+    userId: string
+) => {
+    // No need to declare `rows` at the `createUser` scope.
+    const user = await db
+        .findUsers({ id: userId })
+        .then((rows) => rows[0] ?? null);
+
+    if (user) return user;
+
+    return await db.createUser({
+        id: userId,
+        name: "John Doe",
+    });
+};
+```
