@@ -1,19 +1,19 @@
-import { defineCollection, defineConfig } from '@content-collections/core';
+import { defineCollection, defineConfig } from "@content-collections/core";
 import {
   createDocSchema,
   createMetaSchema,
   transformMDX,
-} from '@fumadocs/content-collections/configuration';
+} from "@fumadocs/content-collections/configuration";
 import { rehypeCode, rehypeCodeDefaultOptions } from "fumadocs-core/mdx-plugins";
 import { transformerTwoslash } from "fumadocs-twoslash";
-import remarkGfm from 'remark-gfm';
-import remarkMdx from 'remark-mdx';
-import { z } from 'zod';
+import remarkGfm from "remark-gfm";
+import remarkMdx from "remark-mdx";
+import { z } from "zod";
 
 const docs = defineCollection({
-  name: 'docs',
-  directory: 'content/docs',
-  include: '**/*.mdx',
+  name: "docs",
+  directory: "content/docs",
+  include: "**/*.mdx",
   schema: z.object({
     ...createDocSchema(z),
     content: z.string(),
@@ -27,20 +27,17 @@ const docs = defineCollection({
           light: "catppuccin-latte",
           dark: "catppuccin-mocha",
         },
-        transformers: [
-          ...(rehypeCodeDefaultOptions.transformers ?? []),
-          transformerTwoslash(),
-        ]
-      }
+        transformers: [...(rehypeCodeDefaultOptions.transformers ?? []), transformerTwoslash()],
+      },
     });
   },
 });
 
 const metas = defineCollection({
-  name: 'meta',
-  directory: 'content/docs',
-  include: '**/meta.json',
-  parser: 'json',
+  name: "meta",
+  directory: "content/docs",
+  include: "**/meta.json",
+  parser: "json",
   schema: z.object(createMetaSchema(z)),
 });
 

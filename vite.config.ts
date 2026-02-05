@@ -1,16 +1,17 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { defineConfig } from 'vite';
-import { tanstackStart } from '@tanstack/react-start/plugin/vite';
-import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
-import tsconfigPaths from 'vite-tsconfig-paths';
-import contentCollections from '@content-collections/vite';
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import contentCollections from "@content-collections/vite";
+import tailwindcss from "@tailwindcss/vite";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+import tsconfigPaths from "vite-tsconfig-paths";
 
-const tsrConfig = JSON.parse(
-  readFileSync(resolve(process.cwd(), 'tsr.config.json'), 'utf-8'),
-) as { routesDirectory: string; generatedRouteTree: string };
-const routesDir = tsrConfig.routesDirectory.replace(/^\.\/src\/?/, '') || 'routes';
+const tsrConfig = JSON.parse(readFileSync(resolve(process.cwd(), "tsr.config.json"), "utf-8")) as {
+  routesDirectory: string;
+  generatedRouteTree: string;
+};
+const routesDir = tsrConfig.routesDirectory.replace(/^\.\/src\/?/, "") || "routes";
 
 export default defineConfig({
   server: {
@@ -21,7 +22,7 @@ export default defineConfig({
     tailwindcss(),
     tsconfigPaths(),
     tanstackStart({
-      srcDirectory: 'src',
+      srcDirectory: "src",
       router: {
         routesDirectory: routesDir,
       },
@@ -36,10 +37,7 @@ export default defineConfig({
         maxRedirects: 5,
         failOnError: true,
       },
-      pages: [
-        { path: '/' },
-        { path: '/docs' },
-      ],
+      pages: [{ path: "/" }, { path: "/docs" }],
     }),
     react(),
   ],

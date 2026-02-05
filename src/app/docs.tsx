@@ -1,9 +1,9 @@
-import { createFileRoute, Outlet } from '@tanstack/react-router';
-import { DocsLayout } from 'fumadocs-ui/layouts/docs';
-import { baseOptions } from '@/lib/layout.shared';
-import { source } from '@/lib/source';
+import { baseOptions } from "@/lib/layout.shared";
+import { source } from "@/lib/source";
+import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { DocsLayout } from "fumadocs-ui/layouts/docs";
 
-export const Route = createFileRoute('/docs')({
+export const Route = createFileRoute("/docs")({
   component: DocsLayoutComponent,
 });
 

@@ -1,6 +1,4 @@
 {
-    "title": "UI",
-    "pages": [
-        "configuration-vs-composition"
-    ]
+  "title": "UI",
+  "pages": ["configuration-vs-composition"]
 }

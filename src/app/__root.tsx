@@ -1,24 +1,19 @@
-import {
-  Outlet,
-  createRootRoute,
-  HeadContent,
-  Scripts,
-} from '@tanstack/react-router';
-import { RootProvider } from 'fumadocs-ui/provider/tanstack';
-import type { ReactNode } from 'react';
-import appCss from '@/app/global.css?url';
+import appCss from "@/app/global.css?url";
+import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { RootProvider } from "fumadocs-ui/provider/tanstack";
+import type { ReactNode } from "react";
 
 export const Route = createRootRoute({
   head: () => ({
     meta: [
-      { charSet: 'utf-8' },
+      { charSet: "utf-8" },
       {
-        name: 'viewport',
-        content: 'width=device-width, initial-scale=1',
+        name: "viewport",
+        content: "width=device-width, initial-scale=1",
       },
-      { title: 'Gray Areas' },
+      { title: "Gray Areas" },
     ],
-    links: [{ rel: 'stylesheet', href: appCss }],
+    links: [{ rel: "stylesheet", href: appCss }],
   }),
   component: RootComponent,
 });
