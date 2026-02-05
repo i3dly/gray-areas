@@ -2,6 +2,7 @@
     "title": "Programming",
     "pages": [
         "abusing-scope",
-        "the-case-against-zustand"
+        "the-case-against-zustand",
+        "builder-pattern-apis"
     ]
 }

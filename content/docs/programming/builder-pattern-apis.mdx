@@ -1,0 +1,313 @@
+---
+title: The builder pattern for APIs
+description: Why the builder pattern is a great way to design APIs—and how to use it for Cloudflare Workflow step functions.
+---
+
+API design shapes how often people make mistakes and how easy it is to discover what's possible. When configuration has many steps, required pieces, and ordering constraints, a single giant config object is hard to get right. The builder pattern—an object that accumulates configuration through method chaining and only then compiles or runs—makes that configuration readable and type-safe. This post shows how that looks in practice using a Cloudflare Workflow step API, and why builders are a strong fit for APIs like it.
+
+## What is the builder pattern
+
+The builder pattern is a way of constructing something complex by calling methods in sequence. Each method returns an object that represents the next "stage" of configuration. You can't call `compile()` until you've supplied the required pieces; you can't call `resolver()` before `input()` if the design forbids it. The API guides you through a valid path.
+
+Contrast that with a single config object: `new WorkflowRunner({ id, input, steps, onStart, onComplete, onFailure, resolver })`. Order doesn't matter to the constructor, so you can't enforce "set input before resolver." It's easy to forget a field and get a runtime error when you finally call `run()`. With a builder, you accumulate configuration step by step, and the type system (and optional runtime checks) can restrict what's valid at each stage.
+
+## How to define a builder API
+
+A builder has three ingredients: (1) an object that holds configuration, (2) chainable methods that return a *new* instance with updated config, and (3) a final method that validates and produces the real result. You can type the return of each method so that only the *allowed* next methods are available—so the config and the valid next steps are explicit in the type. Here's a minimal example:
+
+```ts title="Minimal builder"
+interface QueryConfig {
+  select?: string[];
+  from?: string;
+  where?: string;
+}
+
+class QueryBuilder {
+  public readonly "~": QueryConfig;
+
+  constructor(config: QueryConfig = {}) {
+    this["~"] = config;
+  }
+
+  select(...columns: string[]): Pick<QueryBuilder, "~" | "from"> {
+    return new QueryBuilder({ ...this["~"], select: columns }) as Pick<QueryBuilder, "~" | "from">;
+  }
+
+  from(table: string): Pick<QueryBuilder, "~" | "where" | "build"> {
+    const sel = this["~"].select;
+    if (!sel?.length) throw new Error("select() is required before from()");
+    return new QueryBuilder({ ...this["~"], from: table }) as Pick<QueryBuilder, "~" | "where" | "build">;
+  }
+
+  where(condition: string): Pick<QueryBuilder, "~" | "build"> {
+    const from = this["~"].from;
+    if (!from) throw new Error("from() is required before where()");
+    return new QueryBuilder({ ...this["~"], where: condition }) as Pick<QueryBuilder, "~" | "build">;
+  }
+
+  build(): string {
+    const { select, from, where } = this["~"];
+    if (!select?.length || !from) throw new Error("select and from are required");
+    let sql = `SELECT ${select.join(", ")} FROM ${from}`;
+    if (where) sql += ` WHERE ${where}`;
+    return sql;
+  }
+}
+
+// Factory so the initial type only exposes select().
+function createQueryBuilder(): Pick<QueryBuilder, "~" | "select"> {
+  return new QueryBuilder();
+}
+
+// Usage: each method returns a builder whose type only allows the next valid calls.
+const sql = createQueryBuilder()
+  .select("id", "name")   // return type has only "~" | "from"
+  .from("users")          // return type has only "~" | "where" | "build"
+  .where("active = true") // return type has only "~" | "build"
+  .build();
+// => "SELECT id, name FROM users WHERE active = true"
+```
+
+The pattern: config lives under `"~"`. Each method returns `Pick<QueryBuilder, "~" | "allowed methods">` so the type system only exposes the next valid steps. The factory `createQueryBuilder()` returns a builder that only has `select()`; after `select()` you only get `from()`; after `from()` you get `where()` and `build()`; after `where()` you only get `build()`.
+
+## Example: defining a step
+
+Here we define a step for a Cloudflare Workflow: it has a context type, an optional input schema (Zod), and a resolver that does the work. The builder ensures you set context (or extend it), then optionally input, then resolver, and only then compile.
+
+**Using the step builder:**
+
+```ts title="StepFactory usage"
+import { z } from "zod";
+import { createSteps } from "./createSteps";
+
+const UserInputSchema = z.object({ userId: z.string() });
+type AppContext = { env: { getUser: (id: string) => Promise<User> } };
+
+const fetchUserStep = createSteps()
+  .context<AppContext>()
+  .input(UserInputSchema)
+  .resolver(({ context, input }) => {
+    return context.env.getUser(input.userId);
+  })
+  .compile();
+
+// Later: fetchUserStep(context)({ userId: "123" }) => Promise<User>
+```
+
+**Defining the step builder:** same idea as the minimal builder—config object, chainable methods that return new instances, and `compile()` that validates and returns the runnable.
+
+```ts title="StepFactory (definition)"
+interface StepFactoryConfig<TContext, TInput, TResult> {
+  context?: (ctx: TContext) => TContext;
+  input?: z.ZodObject<Record<string, unknown>>;
+  resolver?: (params: { context: TContext; input: unknown }) => TResult;
+}
+
+class StepFactory<TContext, TInput, TResult> {
+  public readonly "~": StepFactoryConfig<TContext, TInput, TResult>;
+
+  constructor(config: StepFactoryConfig<TContext, TInput, TResult> = {}) {
+    this["~"] = config;
+  }
+
+  context<TNewContext>(): Pick<StepFactory<TNewContext, TInput, TResult>, "~" | "input" | "resolver"> {
+    return new StepFactory({ ...this["~"], context: (x) => x as unknown as TNewContext }) as Pick<
+      StepFactory<TNewContext, TInput, TResult>,
+      "~" | "input" | "resolver"
+    >;
+  }
+
+  input<TNewInput extends z.ZodObject<Record<string, unknown>>>(
+    schema: TNewInput
+  ): Pick<StepFactory<TContext, TNewInput, unknown>, "~" | "resolver"> {
+    if (this["~"].resolver) throw new Error("Resolver was already configured");
+    return new StepFactory({ ...this["~"], input: schema }) as Pick<
+      StepFactory<TContext, TNewInput, unknown>,
+      "~" | "resolver"
+    >;
+  }
+
+  resolver<TNewResult>(
+    fn: (params: { context: TContext; input: TInput }) => TNewResult
+  ): Pick<StepFactory<TContext, TInput, TNewResult>, "~" | "compile"> {
+    if (this["~"].resolver) throw new Error("Resolver was already configured");
+    return new StepFactory({ ...this["~"], resolver: fn }) as Pick<
+      StepFactory<TContext, TInput, TNewResult>,
+      "~" | "compile"
+    >;
+  }
+
+  compile(): (context: TContext) => (input: TInput) => Promise<TResult> {
+    const { resolver } = this["~"];
+    if (!resolver) throw new Error("Resolver is required");
+    const parse = this["~"].input?.parse ?? ((x: unknown) => x);
+    return (context) => (input) =>
+      Promise.resolve(resolver({ context, input: parse(input) as TInput }));
+  }
+}
+
+export const createSteps = <TContext>() => new StepFactory().context<TContext>();
+```
+
+So: context first, then input, then resolver, then compile. Each method returns a `Pick<StepFactory<...>, "~" | "allowed methods">` so only the next valid calls are exposed; `compile()` checks that a resolver exists and returns the runnable function.
+
+## Example: defining a workflow runner
+
+The workflow runner composes many steps and lifecycle hooks. Again, a builder keeps the process ordered and complete: same pattern—config object, chainable methods that return new instances, and `compile()` that validates and returns `{ run }`.
+
+**Using the workflow builder:**
+
+```ts title="WorkflowRunner usage"
+import { z } from "zod";
+import { createRunner } from "./createRunner";
+import { createSteps } from "./createSteps";
+
+const OrderInputSchema = z.object({ orderId: z.string() });
+type WorkflowContext = { env: Env };
+
+const fetchOrderStep = createSteps()
+  .context<WorkflowContext>()
+  .input(OrderInputSchema)
+  .resolver(({ context, input }) => context.env.orders.get(input.orderId))
+  .compile();
+
+const chargePaymentStep = createSteps()
+  .context<WorkflowContext>()
+  .input(z.object({ orderId: z.string(), amount: z.number() }))
+  .resolver(({ context, input }) => context.env.payments.charge(input))
+  .compile();
+
+const runner = createRunner()
+  .context<WorkflowContext>()
+  .id("order-fulfillment")
+  .input(OrderInputSchema)
+  .functions((ctx) => ({
+    fetchOrder: fetchOrderStep(ctx),
+    chargePayment: chargePaymentStep(ctx),
+  }))
+  .onStart(async ({ id }) => console.log(`Workflow ${id} started`))
+  .onComplete(async ({ id }) => console.log(`Workflow ${id} completed`))
+  .onFailure(async ({ id, error }) => console.error(`Workflow ${id} failed:`, error))
+  .resolver(async ({ input, functions }) => {
+    const order = await functions.fetchOrder(input.orderId);
+    await functions.chargePayment({ orderId: input.orderId, amount: order.total });
+  })
+  .compile();
+
+await runner.run({ context: { env }, input: { orderId: "123" } });
+```
+
+You set context, id, input, steps (via `functions`), lifecycle hooks, and resolver, then call `compile()`. The runner's `compile()` checks that id, onStart, onComplete, onFailure, and resolver are all present and only then returns a `{ run }` object.
+
+**Defining the workflow builder:** same structure again—constructor holds config, each method returns a `Pick<WorkflowRunner<...>, "~" | WorkflowRunnerMethods>` so the chainable API is explicit, and `compile()` validates and returns the runnable.
+
+```ts title="WorkflowRunner (definition sketch)"
+interface WorkflowRunnerConfig<TContext, TInput> {
+  id?: string;
+  context?: (ctx: TContext) => TContext;
+  input?: TInput;
+  functions?: (context: TContext) => Record<string, unknown>;
+  onStart?: (params: LifecycleParams<TContext, TInput>) => Promise<void>;
+  onComplete?: (params: LifecycleParams<TContext, TInput>) => Promise<void>;
+  onFailure?: (params: LifecycleParams<TContext, TInput> & { error: Error }) => Promise<void>;
+  resolver?: (params: { id: string; context: TContext; input: TInput; functions: Record<string, unknown> }) => Promise<void>;
+}
+
+interface LifecycleParams<TContext, TInput> {
+  id: string;
+  context: TContext;
+  input: TInput;
+  functions: Record<string, unknown>;
+}
+
+type WorkflowRunnerMethods =
+  | "id"
+  | "input"
+  | "functions"
+  | "onStart"
+  | "onComplete"
+  | "onFailure"
+  | "resolver"
+  | "compile";
+
+class WorkflowRunner<TContext, TInput> {
+  public readonly "~": WorkflowRunnerConfig<TContext, TInput>;
+
+  constructor(config: WorkflowRunnerConfig<TContext, TInput> = {}) {
+    this["~"] = config;
+  }
+
+  id(id: string): Pick<WorkflowRunner<TContext, TInput>, "~" | WorkflowRunnerMethods> {
+    return new WorkflowRunner({ ...this["~"], id }) as Pick<
+      WorkflowRunner<TContext, TInput>,
+      "~" | WorkflowRunnerMethods
+    >;
+  }
+
+  context<TNewContext>(): Pick<WorkflowRunner<TNewContext, TInput>, "~" | WorkflowRunnerMethods> {
+    return new WorkflowRunner({ ...this["~"], context: (x) => x as unknown as TNewContext }) as Pick<
+      WorkflowRunner<TNewContext, TInput>,
+      "~" | WorkflowRunnerMethods
+    >;
+  }
+
+  input<TNewInput>(schema: TNewInput): Pick<WorkflowRunner<TContext, TNewInput>, "~" | WorkflowRunnerMethods> {
+    return new WorkflowRunner({ ...this["~"], input: schema }) as Pick<
+      WorkflowRunner<TContext, TNewInput>,
+      "~" | WorkflowRunnerMethods
+    >;
+  }
+
+  onStart(
+    fn: (params: LifecycleParams<TContext, TInput>) => Promise<void>
+  ): Pick<WorkflowRunner<TContext, TInput>, "~" | WorkflowRunnerMethods> {
+    return new WorkflowRunner({ ...this["~"], onStart: fn }) as Pick<
+      WorkflowRunner<TContext, TInput>,
+      "~" | WorkflowRunnerMethods
+    >;
+  }
+
+  // ... onComplete, onFailure, resolver, functions (same pattern)
+
+  compile(): { run: (params: { context: TContext; input: TInput }) => Promise<void> } {
+    const { id, onStart, onComplete, onFailure, resolver } = this["~"];
+    if (!id || !onStart || !onComplete || !onFailure || !resolver)
+      throw new Error("id, onStart, onComplete, onFailure, and resolver are required");
+    return {
+      run: async (params) => {
+        const { context, input } = params;
+        const functions = this["~"].functions?.(context) ?? {};
+        try {
+          await onStart({ id, context, input, functions });
+          await resolver({ id, context, input, functions });
+          await onComplete({ id, context, input, functions });
+        } catch (error) {
+          await onFailure({ id, context, input, functions, error: error as Error });
+        }
+      },
+    };
+  }
+}
+
+export const createRunner = <TContext>() => new WorkflowRunner().context<TContext>();
+```
+
+Missing required pieces fail in `compile()` with clear errors, not later when `run()` is called.
+
+## Why the builder pattern is good for APIs
+
+**Order and lifecycle.** Methods can be designed so that nonsensical sequences aren't possible—e.g. you can't call `resolver` before `input` because the type after `createSteps().context()` only exposes `input`, `extendContext`, etc. "Compile" only appears when the object is in a complete state. That makes the lifecycle explicit and avoids invalid intermediate states.
+
+**TypeScript.** Each step can narrow or extend types. After `.input(MyInputSchema)`, the resolver receives `input` typed as `z.output<typeof MyInputSchema>`. Context, input, and result types flow through the chain, so you get better inference and fewer mistakes without writing extra type annotations.
+
+**Discoverability.** At each stage, only the relevant methods are available. You don't have to remember a long list of optional config keys; the API surface at the current stage tells you what you can do next. That makes the API self-documenting.
+
+**Validation at the right time.** Required pieces can be checked in `compile()` (or in setters). You get clear errors like "Resolver is required" or "onStart is required" at the moment you try to finish the build, instead of a generic failure when you finally call `run()`.
+
+## Comparison with a single config object
+
+If you passed everything into one constructor—e.g. `new WorkflowRunner({ id, input, steps, onStart, onComplete, onFailure, resolver })`—you'd lose the ability to enforce order. You'd also make it easier to forget a field: TypeScript might allow a partial object, and you'd only discover the mistake at runtime. With a builder, the sequence of calls and the narrowing of the return type push you toward a complete, valid configuration, and `compile()` can enforce the rest.
+
+## Closing
+
+Reach for the builder pattern when you have complex, multi-step configuration where order and completeness matter, and where you want strong typing and a clear "ready to run" moment. APIs like the step factory and workflow runner benefit from it: they stay discoverable, type-safe, and easy to validate at the right time.
