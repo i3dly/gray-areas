@@ -1,0 +1,218 @@
+---
+title: Agentic workflows and prompt design
+description: How to build an agentic workflow and use few-shot and chain-of-thought prompting to boost accuracy.
+---
+
+Remember that time you wired up an LLM to call tools, and it kept picking the wrong one or returning malformed JSON? When you're building an agent that plans, acts, and observes in a loop, how much of the mess comes from the workflow itself versus what you put in the prompt?
+
+When evaluating prompt design, what actually moves the needle on accuracy—and what's just folklore?
+
+Let's say you're about to build an agentic workflow: a loop where the model decides what to do, calls a tool, sees the result, and repeats until the task is done or a limit is hit. The workflow engine (steps, retries, context) is one piece. The other piece is **prompt design**. Two techniques that consistently help are **few-shot prompting** and **chain-of-thought (CoT)**. This post walks through what they are, shows concrete examples of both, and then ties them into a full agentic workflow built with [Cloudflare Workflows](https://developers.cloudflare.com/workflows/)—reusing the step builder from [The builder pattern for APIs](/docs/programming/builder-pattern-apis) so the workflow stays type-safe and ordered.
+
+## What is an agentic workflow?
+
+An **agentic** workflow is a loop: **plan → act → observe → repeat**. The model gets context (user goal, available tools, maybe prior turns). It outputs a decision: call tool X with arguments Y, or finish with an answer. You run the tool, feed the result back in, and run the model again. Repeat until the model says "done" or you hit a max step count.
+
+The workflow engine handles retries, state, and tool execution. The **prompt** shapes how well the model chooses tools and formats output. If the model often picks the wrong tool or returns invalid JSON, improving the prompt (e.g. with few-shot and CoT) usually has a bigger impact than tweaking the loop logic. So: same workflow structure, better prompts → fewer bad tool calls and retries.
+
+## Few-shot prompting
+
+**Few-shot prompting** means putting one or more example input/output pairs in the prompt. Instead of only describing the task, you show the model: "Given this kind of input, here's the output I want." That clarifies the task, the format, and edge cases (e.g. when to say "none" or use a specific structure).
+
+### When it helps
+
+Few-shot helps when:
+
+- The desired output format is strict (e.g. JSON with specific keys).
+- There are ambiguous cases (e.g. "no matching entity" vs "entity found").
+- Zero-shot instructions alone lead to inconsistent or wrong formats.
+
+### Concrete example: intent + entity extraction
+
+Suppose the agent must choose a tool and extract arguments from the user message. You want a consistent JSON shape so your workflow can parse it. A zero-shot prompt might work sometimes but often produces extra keys or wrong types. Adding one or two examples in the prompt fixes that.
+
+**Prompt (snippet):**
+
+```
+You are a routing assistant. Given the user message, output a JSON object with:
+- "intent": one of "search", "book", "cancel", "unknown"
+- "entities": object with slots needed for that intent (e.g. for "book": { "date": "...", "time": "..." }).
+
+Examples:
+
+User: "Find me a table for two tomorrow at 7pm"
+{"intent": "book", "entities": {"party_size": 2, "date": "tomorrow", "time": "19:00"}}
+
+User: "I want to cancel my reservation"
+{"intent": "cancel", "entities": {}}
+
+User: "What's the weather like?"
+{"intent": "unknown", "entities": {}}
+
+Now respond with JSON only for this user message:
+User: <actual message>
+```
+
+**Example input:** `"Book a table for 4 on Friday at 8"`  
+**Example output:** `{"intent": "book", "entities": {"party_size": 4, "date": "Friday", "time": "20:00"}}`
+
+With that in the prompt, the model sees the exact shape and how to handle "unknown" and empty `entities`. You get fewer parse errors and more consistent tool selection.
+
+## Chain-of-thought (CoT)
+
+**Chain-of-thought** means asking the model to reason step by step before giving the final answer (or tool call). You can do that by adding an instruction like "Think step by step" or by including few-shot examples where the model's reasoning is written out. CoT reduces reasoning errors on multi-step tasks because the model explicitly lays out its logic instead of jumping to a conclusion.
+
+### When it helps
+
+CoT helps when:
+
+- The decision depends on several pieces of context (e.g. "Do we have X? If not, call tool A; if yes, check Y and then call B").
+- The model often "skips" a step and picks the wrong tool.
+- You need a trace for debugging or safety.
+
+### Concrete example: choosing the next tool
+
+Suppose the agent has two tools: `get_order(orderId)` and `refund_order(orderId, reason)`. The user says "I never got my order 123, I want my money back." The model must decide: call `get_order` first to confirm the order, then maybe `refund_order`, or just refund? Without CoT it might guess; with CoT it can reason through the steps.
+
+**Prompt (snippet):**
+
+```
+You have two tools: get_order(orderId), refund_order(orderId, reason).
+Given the conversation and user message, think step by step, then output your next action as JSON: {"tool": "…", "args": {…}} or {"done": true, "response": "…"}.
+
+Example:
+
+User: "Refund order 456 please"
+Thought: The user asked for a refund. I should verify the order exists before refunding. I'll call get_order first.
+{"tool": "get_order", "args": {"orderId": "456"}}
+
+(After get_order returns) User: "Refund order 456 please"
+Thought: Order 456 exists. User wants a refund. I'll call refund_order with a generic reason.
+{"tool": "refund_order", "args": {"orderId": "456", "reason": "Customer request"}}
+```
+
+**Sample step-by-step output for a new message:**
+
+User: "I never received order 123, give me my money back."
+
+Model output:
+
+```
+Thought: The user says they never received order 123 and wants a refund. I don't have order details yet. I should call get_order(123) to confirm the order exists and get its status before issuing a refund.
+{"tool": "get_order", "args": {"orderId": "123"}}
+```
+
+By forcing a "Thought:" line, you get a clear reasoning trace and a better chance the model chooses `get_order` first instead of jumping straight to `refund_order`. That improves accuracy and makes misbehavior easier to debug.
+
+## Using both together
+
+You can combine few-shot and CoT in one prompt: give 1–2 examples where each example includes both the reasoning steps and the final JSON (or tool call). The model then learns the format *and* the reasoning pattern. That combo is especially useful when the right action depends on multiple conditions (e.g. "if no order found, say X; if order found but not shipped, call Y; if shipped, call Z"). Use it when you care about both format consistency and correct multi-step decisions; the extra tokens are often worth the accuracy gain.
+
+## Elaborate example: Cloudflare Workflows
+
+Here we build a small agentic workflow with Cloudflare Workflows. The loop is: run an LLM step (with few-shot + CoT in the prompt), parse the output, run a tool step if needed, feed the result back, and repeat. We define each step with a step builder so the workflow stays ordered and type-safe. **We're reusing the same step builder pattern from [The builder pattern for APIs](/docs/programming/builder-pattern-apis)**—`createSteps()`, `.context()`, `.input()`, `.resolver()`, `.compile()`—so if you've read that post, the shape below will look familiar.
+
+Assume we have two tools: `get_order` and `refund_order`. The agent's job is to handle user messages by deciding the next tool call or final reply. The LLM step uses a prompt that includes few-shot + CoT examples like in the sections above; the workflow just runs the step, parses JSON, invokes the tool, and passes the result back into the next iteration.
+
+**Step 1: LLM step (with few-shot + CoT in the prompt)**
+
+We define a step that takes the current conversation state and user message, calls the LLM with a prompt that contains our few-shot and CoT examples, and returns the model's raw output (e.g. a string that we'll parse elsewhere). The important part is that the resolver builds the prompt with those examples and the "Think step by step" instruction, then calls the model.
+
+```ts title="Agent workflow steps"
+import { z } from "zod";
+import { createSteps } from "./createSteps"; // from the builder pattern post
+
+const AgentContextSchema = z.object({
+  messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })),
+  userMessage: z.string(),
+  tools: z.record(z.unknown()),
+});
+
+type AgentContext = { env: Env; openai: OpenAI };
+
+const llmStep = createSteps()
+  .context<AgentContext>()
+  .input(AgentContextSchema)
+  .resolver(async ({ context, input }) => {
+    const systemPrompt = `You have tools: get_order(orderId), refund_order(orderId, reason).
+For each user message, think step by step, then output JSON: {"tool": "…", "args": {…}} or {"done": true, "response": "…"}.
+
+Example:
+User: "Refund order 456"
+Thought: Need to verify order first.
+{"tool": "get_order", "args": {"orderId": "456"}}`;
+
+    const response = await context.openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...input.messages.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: input.userMessage },
+      ],
+    });
+    return response.choices[0]?.message?.content ?? "";
+  })
+  .compile();
+```
+
+**Step 2: Tool execution step**
+
+A second step takes the parsed decision (tool name + args), runs the corresponding tool from context, and returns the result. Again we use the step builder from [The builder pattern for APIs](/docs/programming/builder-pattern-apis): `createSteps()`, `.context()`, `.input()`, `.resolver()`, `.compile()`.
+
+```ts title="Tool step"
+const ToolInputSchema = z.object({
+  tool: z.string(),
+  args: z.record(z.unknown()),
+});
+
+const toolStep = createSteps()
+  .context<AgentContext>()
+  .input(ToolInputSchema)
+  .resolver(async ({ context, input }) => {
+    const fn = context.env.tools[input.tool];
+    if (!fn) throw new Error(`Unknown tool: ${input.tool}`);
+    return fn(input.args);
+  })
+  .compile();
+```
+
+**Step 3: Workflow resolver (agent loop)**
+
+The workflow runner is built with the same workflow builder from [The builder pattern for APIs](/docs/programming/builder-pattern-apis) (`createRunner()`, `.context()`, `.id()`, `.input()`, `.functions()`, `.resolver()`, `.compile()`). The runner's resolver runs the loop: call the LLM step, parse the output, if it's a tool call run the tool step and append the result to the conversation, then repeat. If the output is `{"done": true, "response": "…"}`, exit and return the response. This is where the agent loop lives—and the accuracy of each iteration depends on the prompt (few-shot + CoT) inside the LLM step.
+
+```ts title="Workflow resolver (loop)"
+const runner = createRunner()
+  .context<WorkflowContext>()
+  .id("order-agent")
+  .input(z.object({ userMessage: z.string() }))
+  .functions((ctx) => ({
+    llm: llmStep(ctx),
+    tool: toolStep(ctx),
+  }))
+  .resolver(async ({ input, functions }) => {
+    const state = { messages: [], userMessage: input.userMessage, tools: {} };
+    for (let i = 0; i < 10; i++) {
+      const raw = await functions.llm(state);
+      const parsed = parseModelOutput(raw); // extract JSON from "Thought: ... \n {...}"
+      if (parsed.done) return parsed.response;
+      const toolResult = await functions.tool({ tool: parsed.tool, args: parsed.args });
+      state.messages.push(
+        { role: "user", content: input.userMessage },
+        { role: "assistant", content: raw },
+        { role: "user", content: JSON.stringify(toolResult) }
+      );
+    }
+    throw new Error("Max steps reached");
+  })
+  .compile();
+```
+
+By putting few-shot and CoT in the LLM step's system prompt, the model produces consistent JSON and better tool choices. Few-shot fixes format and edge cases; CoT fixes reasoning (e.g. "get order before refund"). The workflow engine stays the same; the prompt design is what boosts accuracy and cuts down bad tool calls and retries.
+
+## Practical tips
+
+- **Keep prompts maintainable.** Put few-shot examples and CoT instructions in templates or constants so you can change them without digging through step code.
+- **Token cost vs accuracy.** Few-shot and CoT use more tokens per call. Start with 1–2 examples and short CoT; add more only if accuracy still needs improvement.
+- **Fit into the loop.** Design the prompt so the model's output is easy to parse (e.g. JSON after "Thought: ..."). That keeps the agent loop simple and robust.
+
+When you build an agentic workflow, the loop is only half the story. The other half is prompt design. Few-shot and chain-of-thought are two levers that consistently improve accuracy; use them in the steps that call the LLM, and call out and link to the step builder pattern (e.g. [The builder pattern for APIs](/docs/programming/builder-pattern-apis)) when you reuse it so readers know where the workflow structure comes from.
