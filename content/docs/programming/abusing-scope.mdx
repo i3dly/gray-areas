@@ -3,15 +3,15 @@ title: Abusing Scope
 description: How to reduce function complexity by abusing the scope of variables.
 ---
 
-Have you ever needed to work within functions that referened global variables? Or functions that started with a ton of variable declarations at the top? How difficult did you find it to understand those functions?
+Have you ever worked in functions that referenced global variables, or in functions that declared a ton of variables at the top? How hard were they to follow?
 
-Years ago, I read this article called [The Magical Number Seven, Plus or Minus Two](https://en.wikipedia.org/wiki/The_Magical_Number_Seven,_Plus_or_Minus_Two) that described how human beings can only keep track of about 7±2 things in their working memory. Each new variable that becomes added to a scope adds another "thing" that needs to be tracked in your working memory.
+Years ago I read [The Magical Number Seven, Plus or Minus Two](https://en.wikipedia.org/wiki/The_Magical_Number_Seven,_Plus_or_Minus_Two), which explains that we can only keep about 7±2 things in working memory. Every variable in a scope is one more thing to track.
 
-The scope of a variable (i.e. scope) defines where variables can be accessed or modified in your code. By constraining scopes, we can reduce the things that need to be tracked, and make our code easier to understand. Here are a few examples of how we can "abuse scope" to achieve this.
+*Scope* is where a variable can be read or changed. By narrowing scope, we shrink how much we have to hold in our heads and make the code easier to understand. Here are a few ways to "abuse scope" to do that.
 
 ## Moving variables down
 
-Typically, code that is executed synchronously cannot reference variables that are declared after it (as they have not yet been instantiated). As a result, most code you'll see will write all of the variable declarations at the top so that they are available to the rest of the function.
+In synchronous code, you can't use a variable before it's declared. So it's common to declare everything at the top of a function so the rest of the code can use it.
 
 ```ts
 const prepareFeast = () => {
@@ -36,7 +36,7 @@ const prepareFeast = () => {
 };
 ```
 
-However, if we move each of the variables down to the closest point of use, we can reduce the amount of variables that are usable earlier in the function.
+If we declare each variable as close as possible to where it's used, fewer variables are in scope at any given moment—so there's less to keep in your head while reading the top of the function.
 
 ```ts
 const prepareFeast = () => {
@@ -68,7 +68,7 @@ const prepareFeast = () => {
 
 ## Using .then() in async functions
 
-Typically, using `async` on a function serves the purpose of avoiding using callbacks for asynchronous operations (i.e. [callback hell](https://callbackhell.com/)).
+We usually add `async` to a function to avoid callback-based async code ([callback hell](https://callbackhell.com/)).
 
 ```ts title="this-used-to-suck.ts"
 const createUser = (
@@ -118,7 +118,7 @@ const createUser = async (
     });
 ```
 
-However, even when using `async`, using a `.then()` callback can still be handy to avoid introducing new variables to the scope that would only be used to derive a single value.
+Even with `async`, a `.then()` callback can help: it lets you avoid adding a variable to the function scope when you only need it to compute a single value.
 
 ```ts title="this-is-even-simpler.ts"
 const createUser = async (
@@ -137,3 +137,60 @@ const createUser = async (
     });
 };
 ```
+
+## Isolating a block: helper functions and IIFEs
+
+Sometimes a chunk of logic needs several intermediate variables that the rest of the function never uses. You could declare them all in the same scope—or you could move that chunk into its own scope so those variables never leave the block. Two ways to do that: a **helper function** or an [**IIFE**](https://developer.mozilla.org/en-US/docs/Glossary/IIFE) (immediately invoked function expression).
+
+```ts
+const processRequest = (req: Request) => {
+    const body = readBody(req);
+
+    const parsed = JSON.parse(body);
+    const validated = validateSchema(parsed);
+    const result = runBusinessLogic(validated);
+
+    logger.info("Processed", { id: req.id });
+    return sendResponse(result);
+};
+```
+
+Here, `parsed` and `validated` exist for the whole function even though they're only used to get `result`. A helper function gives them their own scope and a name that describes the step:
+
+```ts
+const processRequest = (req: Request) => {
+    const body = readBody(req);
+    const result = parseAndRun(body);
+
+    logger.info("Processed", { id: req.id });
+    return sendResponse(result);
+};
+
+function parseAndRun(body: string) {
+    const parsed = JSON.parse(body);
+    const validated = validateSchema(parsed);
+    return runBusinessLogic(validated);
+}
+```
+
+If that logic is only used once and doesn't need a name, an IIFE does the same thing without leaving the function:
+
+```ts
+const processRequest = (req: Request) => {
+    const body = readBody(req);
+    const result = (() => {
+        const parsed = JSON.parse(body);
+        const validated = validateSchema(parsed);
+        return runBusinessLogic(validated);
+    })();
+
+    logger.info("Processed", { id: req.id });
+    return sendResponse(result);
+};
+```
+
+Either way, the outer function only has to track `body` and `result`; the intermediates stay hidden.
+
+## Wrapping up
+
+Scope isn't just where names are valid—it's a way to limit how much the reader has to hold in mind at once. Declare variables near their use, use callbacks like `.then()` when they keep one-off values out of the outer scope, and isolate dense blocks with a helper function or an IIFE when you want to keep intermediates from leaking out. The goal is the same: fewer things in scope at any moment, so the code stays within that 7±2 and stays readable.
