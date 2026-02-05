@@ -87,17 +87,10 @@ const createUser = (
             return;
         }
 
-        db.createUser({
-            id: userId,
-            name: "John Doe",
-        }, (newUser, err) => {
-            if (err) {
-                callback(null, err);
-                return;
-            }
-
-            callback(newUser, null);
-        });
+        db.createUser(
+            { id: userId, name: "John Doe" },
+            callback
+        );
     });
 };
 ```

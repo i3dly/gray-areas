@@ -1,0 +1,51 @@
+---
+title: The case against Zustand
+description: Why state management libraries like Zustand, Jotai, and Redux shouldn't be the default—and what to use instead.
+---
+
+State management libraries like Zustand, Jotai, and Redux are good at what they do. They make providers and subscriptions much nicer than raw React Context—no provider hell, better performance, ergonomic APIs. If you're going to have a lot of global state, they're far more pleasant than wiring a dozen Contexts.
+
+The problem is that they're often added by default in new projects, and they introduce complex paradigms. Making global state easy to add leads to overuse. Most of the time the thing you need "everywhere" is server data, and TanStack Query (or similar) already solves that with a cache key and a hook. This isn't a critique of the libraries themselves; it's a critique of treating them as the default. The rest of this post is why to push back on that default and when a store is still worth reaching for.
+
+## The case for friction
+
+Global state is global complexity. Every consumer can read it and often write it. Reasoning about the app gets harder; refactors get riskier. Making it *easy* to add global state doesn't just lead to overuse—it incentivizes developers to put things in global state that don't belong there. Form state, UI toggles, or data that only two components share end up in a store because "we might need it elsewhere" or because dropping it in Zustand was one line.
+
+React Context isn't clunky on purpose. But its clunkiness is an advantage anyway: it creates friction. You have to add a provider, wire the value, and think about where it lives. That friction makes you ask whether you really need global state. You want adding global state to feel like a deliberate, occasionally painful choice.
+
+## TanStack Query for the common case
+
+In practice, the main "need this everywhere" need is server or API data: current user, feature flags, cached API responses. That's not really "state" in the same sense—it's a cached snapshot of something that lives on the server. TanStack Query (or React Query, or similar) gives you app-wide access via a stable cache key and a hook. Loading, error, and cache invalidation are built in. You don't need a separate global store for that.
+
+Compare putting the current user in Zustand:
+
+```ts title="user-store.ts"
+import { create } from 'zustand';
+
+export const useUserStore = create<{ user: User | null; setUser: (u: User | null) => void }>((set) => ({
+  user: null,
+  setUser: (user) => set({ user }),
+}));
+
+// Somewhere: fetch user, then setUser(data). Every consumer imports useUserStore.
+```
+
+versus TanStack Query:
+
+```ts
+const { data: user, isLoading, error } = useQuery({
+  queryKey: ['currentUser'],
+  queryFn: fetchCurrentUser,
+});
+// Any component that needs the user uses the same queryKey. Cache is shared; refetch/invalidate is built in.
+```
+
+The query cache *is* your shared "store" for server data. You get deduplication, loading and error state, and invalidation without writing a store or keeping it in sync.
+
+## When global state might still be justified
+
+There is real client-only, cross-tree state that isn't server cache: complex multi-step wizards, certain UI state that truly spans many unrelated components. Even then, React state plus composition or a single Context is often enough. Reach for Zustand, Jotai, or Redux only when the friction of Context is genuinely blocking you—not as the default.
+
+## Closing
+
+Prefer friction for global state. Default to TanStack Query (or similar) for shared server data. Treat state management libraries as a last resort, not the first tool you reach for.
