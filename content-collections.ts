@@ -8,12 +8,16 @@ import { rehypeCode, rehypeCodeDefaultOptions } from "fumadocs-core/mdx-plugins"
 import { transformerTwoslash } from "fumadocs-twoslash";
 import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
+import { z } from 'zod';
 
 const docs = defineCollection({
   name: 'docs',
   directory: 'content/docs',
   include: '**/*.mdx',
-  schema: createDocSchema,
+  schema: z.object({
+    ...createDocSchema(z),
+    content: z.string(),
+  }),
   transform: (document, context) => {
     return transformMDX(document, context, {
       remarkPlugins: [remarkGfm, remarkMdx],
@@ -37,7 +41,7 @@ const metas = defineCollection({
   directory: 'content/docs',
   include: '**/meta.json',
   parser: 'json',
-  schema: createMetaSchema,
+  schema: z.object(createMetaSchema(z)),
 });
 
 export default defineConfig({
